@@ -1,7 +1,13 @@
 #version 120
 
-#define goalHue 40.0 // the desired hue to display [0 10 20 30 40 50 60 70 80 90 100 110 120 130 140 150 160 170 180 190 200 220 230 240 250 260 270 280 290 300 310 320 330 340 350]
-#define wiggle 20 // wiggle room [0 10 20 30 40 50 60 70 80 90 100 110 120 130 140 150 160 170 180 190 200 220 230 240 250 260 270 280 290 300 310 320 330 340 350]
+
+#define hueSteps 8 // the number of hues to use [2 4 8 16 32 64]
+#define satSteps 4 // the number of saturations to use [2 4 8 16 32 64]
+#define valSteps 4 // the number of lightnesses to use [2 4 8 16 32 64] 
+
+//#define RGB // whether to use rgb or hsv [0 1]
+#define rgbSteps 4 // the number of rgb values to use [2 4 8 16 32 64]
+
 //#define BLACKEN // Whether or not to blackent the background
 
 uniform sampler2D gcolor;
@@ -31,6 +37,9 @@ vec3 hsv2rgb(vec3 c)
 
 const float steps = 4.0;
 
+uniform vec3 palette[8];
+uniform int paletteSize;
+
 const int indexMatrix4x4[16] = int[](0,  8,  2,  10,
                                      12, 4,  14, 6,
                                      3,  11, 1,  9,
@@ -54,12 +63,47 @@ float indexValue() {
     return indexMatrix4x4[(x + y * 4)] / 16.0;
 }
 
-float dither(float color) {
-    float closestColor = (color <= 0.5) ? 0 : 1;
-    float secondClosestColor = 1 - closestColor;
+
+float hueDistance(float h1, float h2) {
+    float diff = abs((h1 - h2));
+    return min(abs((1.0 - diff)), diff);
+}
+vec3[2] closestColors(float hue) {
+    vec3 ret[2];
+    vec3 closest = vec3(-2, 0, 0);
+    vec3 secondClosest = vec3(-2, 0, 0);
+    vec3 temp;
+    for (int i = 0; i < paletteSize; ++i) {
+        temp = palette[i];
+        float tempDistance = hueDistance(temp.x, hue);
+        if (tempDistance < hueDistance(closest.x, hue)) {
+            secondClosest = closest;
+            closest = temp;
+        } else {
+            if (tempDistance < hueDistance(secondClosest.x, hue)) {
+                secondClosest = temp;
+            }
+        }
+    }
+    ret[0] = closest;
+    ret[1] = secondClosest;
+    return ret;
+}
+
+float lightnessStep(float l, float lightnessSteps) {
+    /* Quantize the lightness to one of `lightnessSteps` values */
+    return floor((0.5 + l * (lightnessSteps - 1.0))) / (lightnessSteps - 1.0);
+}
+
+float dither(float color, float dithersteps) {
     float d = indexValue();
-    float distance = abs(closestColor - color);
-    return (distance <= d) ? closestColor : secondClosestColor;
+
+    float l1 = lightnessStep(max((color - 0.125), 0.0), dithersteps);
+    float l2 = lightnessStep(min((color + 0.124), 1.0), dithersteps);
+    float lightnessDiff = (color - l1) / (l2 - l1);
+
+    float resultColor = (lightnessDiff < d) ? l1 : l2;
+    return resultColor;
 }
 
 void main() {
@@ -67,14 +111,16 @@ void main() {
 	vec3 ogRGB = texture2D(gcolor, texcoord).rgb;
 	vec3 ogHSV = rgb2hsv(ogRGB).xyz;
     float val = ogHSV.z;
-	float val4 = floor(val * 4.0) / 4.0;
-	vec3 valtest = hsv2rgb(vec3(0, 0, val4)).rgb;
-	vec3 test64 = vec3((floor(ogRGB.r * 4.0) / 4.0), (floor(ogRGB.g * 4.0) / 4.0), (floor(ogRGB.b * 4.0) / 4.0)).rgb;
-	vec3 test64hsv = hsv2rgb(vec3((floor(ogHSV.x * 4.0) / 4.0), (floor(ogHSV.y * 4.0) /4.0), (floor(ogHSV.z * 8.0) /8.0))).rgb;
-	vec3 otherdithertest = hsv2rgb(vec3(0, 0, dither(float(val * 1.0)))).rgb;
-	vec3 otherdithertest2 = hsv2rgb(vec3((floor(ogHSV.x * 8.0) / 8.0), (floor(ogHSV.y * 8.0) /8.0), dither(float(val * 2.0)))).rgb;
-
+    vec3 ditherhsv = hsv2rgb(vec3(dither(ogHSV.x, hueSteps), dither(ogHSV.y, satSteps), dither(ogHSV.z, valSteps))).rgb;
+    vec3 nonditherhsv = hsv2rgb(vec3(lightnessStep(ogHSV.x, hueSteps), lightnessStep(ogHSV.y, satSteps), lightnessStep(ogHSV.z, valSteps))).rgb;
+    vec3 ditherrgb = vec3(dither(ogRGB.r, rgbSteps), dither(ogRGB.g, rgbSteps), dither(ogRGB.b, rgbSteps)).rgb;
+    vec3 nonditherrgb = vec3(lightnessStep(ogRGB.r, rgbSteps), lightnessStep(ogRGB.g, rgbSteps), lightnessStep(ogRGB.b, rgbSteps)).rgb;
+    #ifdef RGB 
+        vec3 final = ditherrgb;
+    #else 
+        vec3 final = ditherhsv;
+    #endif
 /* DRAWBUFFERS:0 */
-	gl_FragData[0] = vec4(vec3(otherdithertest), 1.0); //gcolor
+	gl_FragData[0] = vec4(vec3(final), 1.0); //gcolor
 }
 
